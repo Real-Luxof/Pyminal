@@ -10,8 +10,7 @@ the `scroll_lock` variable allows you to lock the scrolling in place! Fun.
 
 Doesn't support:
     `\\a` - Terminal bell (used for warnings iirc)
-    '\\b' - Backspace
-    ''"""
+    '\\b' - Backspace"""
 
 import pygame
 from fonts.font_size_requirements import font_size_requirements
