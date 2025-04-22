@@ -18,6 +18,8 @@ from fonts.font_size_requirements import font_size_requirements
 from threading import Thread
 from os import listdir
 from time import sleep
+import logging
+logging.basicConfig(filename="sendtoLuxofifdoesntworklol.txt", filemode="a", level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 class letter:
@@ -26,21 +28,24 @@ class letter:
         letter: str,
         font: str,
         fg_color: list[int, int, int, int],
-        bg_color: list[int, int, int, int]
+        bg_color: list[int, int, int, int],
+        font_options: list[bool, bool, bool]
     ):
         self.letter = letter
         self.font = font
         self.fg_color = fg_color
         self.bg_color = bg_color
+        self.font_options = font_options
     
     def extract_attributes(
         self
-    ) -> tuple[str, list[int, int, int, int], list[int, int, int, int]]:
+    ) -> tuple[str, list[int, int, int, int], list[int, int, int, int], list[bool, bool, bool]]:
         """Get everything except the char in a tuple."""
         return (
             self.font,
             self.fg_color,
-            self.bg_color
+            self.bg_color,
+            self.font_options
         )
     
     def __repr__(
@@ -77,16 +82,25 @@ current_font: pygame.font.Font = fonts[current_font_name]
 char_height = font_size_requirements[f"{current_font_name}.ttf"]
 
 quit_flag = False
-updating_screen = False
 cursor = [0, 0]
 saved_cursor_pos = [0, 0]
 scroll_lock = False
+_MOUSEWHEEL_events = []
 
 background_color = (12, 12, 12, 255)
 foreground_color = (200, 200, 200, 255)
 
 screen.fill((12, 12, 12, 255))
 pygame.display.flip()
+
+
+# special print lol
+def special_print(
+    level: int,
+    text: str
+) -> None:
+    print(text)
+    logging.log(level, text)
 
 
 def _isint(
@@ -146,37 +160,58 @@ def _calculate_y_offset(
 
 
 scroll_idx = 0
-end_render = len(terminal_grid) # meh just put it above the terminal char height
 
 def _scrolling_thread() -> None:
     global terminal_grid
     global scroll_lock
     global scroll_idx
     global quit_flag
+    global _MOUSEWHEEL_events
     while not quit_flag:
         sleep(1/30)
-        end_render = len(terminal_grid)
         if scroll_lock:
             scroll_idx = 0
             continue
         
-        for event in pygame.event.get((pygame.MOUSEWHEEL)):
+        if len(_MOUSEWHEEL_events) <= 0:
+            continue
+        
+        y_with_flipping_considered: int = 0
+        indexes = []
+        
+        for event_index in range(len(_MOUSEWHEEL_events)):
+            indexes.append(event_index)
+            event = _MOUSEWHEEL_events[event_index]
+            
             flipped = 1 - (2 * int(event.flipped))
-            y_with_flipping_considered = flipped * event.y
+            y_with_flipping_considered: int = flipped * event.y
             if y_with_flipping_considered == 1 and scroll_idx > 0:
                 scroll_idx -= 1
-            elif y_with_flipping_considered == -1 and scroll_idx < end_render - 30:
+            elif y_with_flipping_considered == -1 and scroll_idx < len(terminal_grid) - 30:
                 scroll_idx += 1
+        
+        update_terminal()
+        flush()
+        
+        try:
+            for index in indexes:
+                del _MOUSEWHEEL_events[index]
+        except IndexError:
+            continue
+        
 Thread(target=_scrolling_thread).start()
 
 
 def quit_check() -> bool:
-    """Do this on the main thread every once in a while so the window keeps working."""
+    """Do this on the main thread every once in a while so the window keeps working and so scrolling keeps happening."""
     global quit_flag
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            quit_flag = True
-            break
+    global _MOUSEWHEEL_events
+    for event in pygame.event.get((pygame.QUIT, pygame.MOUSEWHEEL)):
+        if event.type == pygame.MOUSEWHEEL:
+            _MOUSEWHEEL_events.append(event)
+            continue
+        quit_flag = True
+        break
     return quit_flag
 
 
@@ -211,7 +246,6 @@ def printf(
     color_code = False
     using_color_code = 0
     color_code_buffer = ""
-    newlines = 0
     for char in text:
         if color_code:
             color_code_buffer += char
@@ -222,15 +256,13 @@ def printf(
             color_code = False
             using_color_code = 0
             if not color_code_buffer.endswith("!") and not color_code_buffer.endswith("m"):
-                _parse_ansi_command(color_code_buffer)
-                color_code_buffer = ""
-                continue
-            
-            new_color = _parse_ansi_color(color_code_buffer)
+                new_color = _parse_ansi_command(color_code_buffer)
+            else:
+                new_color = _parse_ansi_color(color_code_buffer)
             
             if isinstance(new_color, int):
-                print(f"WARNING: WHAT WENT WRONG?: {new_color}")
-                print(f"OFFENDING CODE: {color_code_buffer}")
+                special_print(logging.WARNING, f"WARNING: WHAT WENT WRONG?: {new_color}")
+                special_print(logging.WARNING, f"OFFENDING CODE: {color_code_buffer.replace("\x1b", "\\x1b")}")
                 color_code_buffer = ""
                 continue
             elif new_color is None:
@@ -246,15 +278,22 @@ def printf(
             elif new_color[3] == 2:
                 foreground_color = (200, 200, 200, 255)
                 background_color = (12, 12, 12, 255)
-            continue
+                current_font.set_italic(False)
+                current_font.set_underline(False)
+                current_font.set_strikethrough(False)
         
-        if char == "\n":
+        elif char == "\n":
             cursor[1] += 1
-            newlines += 1
             try:
                 terminal_grid[cursor[1]]
             except IndexError:
                 terminal_grid.insert(cursor[1], [])
+            length_of_new_line = len(terminal_grid[cursor[1]])
+            
+            if length_of_new_line > 1:
+                cursor[0] = len(terminal_grid[cursor[1]]) - 1
+            else:
+                cursor[0] = 0
         
         elif char == "\r":
             cursor[0] = 0
@@ -274,7 +313,8 @@ def printf(
                 char,
                 current_font_name,
                 foreground_color,
-                background_color
+                background_color,
+                [current_font.get_italic(), current_font.get_underline(), current_font.get_strikethrough()]
             )
             try:
                 terminal_grid[cursor[1]][cursor[0]] = char_
@@ -282,14 +322,31 @@ def printf(
                 terminal_grid[cursor[1]].append(char_)
             cursor[0] += 1
         
-        elif not overwrite: # gotta be safe ykyk
+        elif not overwrite: # gotta b safe ykyk
+            # no i dont "ykyk" what about this is extra safety?? it's common sense
             terminal_grid[cursor[1]].insert(cursor[0], letter(
                 char,
                 current_font_name,
                 foreground_color,
-                background_color
+                background_color,
+                [current_font.get_italic(), current_font.get_underline(), current_font.get_strikethrough()]
             ))
             cursor[0] += 1
+    
+    
+    if color_code and not _isint(color_code_buffer[-1]):
+        if color_code_buffer[-1] in ("m", "!"):
+            new_color = _parse_ansi_color(color_code_buffer)
+        else:
+            new_color = _parse_ansi_command(color_code_buffer)
+        
+        if isinstance(new_color, int):
+            special_print(logging.WARNING, f"WARNING: WHAT WENT WRONG?: {new_color}")
+            special_print(logging.WARNING, f"OFFENDING CODE: {color_code_buffer.replace("\x1b", "\\x1b").replace("\x1c", "\\x1c")}")
+            color_code_buffer = ""
+        elif new_color is None:
+            color_code_buffer = ""
+    
     
     if update:
         update_terminal()
@@ -356,7 +413,7 @@ def _parse_ansi_color(
         
         
         "31": (200, 0, 0, 0),
-        "32": (78, 164, 6, 0),
+        "35": (78, 164, 6, 0),
         "33": (196, 160, 0, 0),
         "34": (8, 48, 218, 0),
         "35": (117, 80, 123, 0),
@@ -373,7 +430,7 @@ def _parse_ansi_color(
         "47": (211, 215, 207, 1),
         "49": (12, 12, 12, 1),
         
-        
+        "90": (85, 87, 83, 0),
         "91": (239, 41, 41, 0),
         "92": (138, 226, 52, 0),
         "93": (252, 233, 79, 0),
@@ -382,6 +439,7 @@ def _parse_ansi_color(
         "96": (52, 226, 226, 0),
         "97": (238, 238, 236, 0),
         
+        "100": (85, 87, 83, 1),
         "101": (239, 41, 41, 1),
         "102": (138, 226, 52, 1),
         "103": (252, 233, 79, 1),
@@ -393,13 +451,24 @@ def _parse_ansi_color(
     
     if len(code) <= 3:
         # "0"-"107"
-        if code == "2":
-            # it's italics lol
+        if code == "3":
             current_font.set_italic(True)
-        try:
-            return colors_dict[code]
-        except KeyError:
-            return 1 # Color not available
+        elif code == "4":
+            current_font.set_underline(True)
+        elif code == "9":
+            current_font.set_strikethrough(True)
+        elif code == "23":
+            current_font.set_italic(False)
+        elif code == "24":
+            current_font.set_underline(False)
+        elif code == "29":
+            current_font.set_strikethrough(False)
+        else:
+            try:
+                return colors_dict[code]
+            except KeyError:
+                return 1 # Color not available
+        return
     
     # if it's not one of the 16 colors it has to be
     # either something explicit like 38/48;2;255;0;0 or
@@ -449,6 +518,7 @@ def _parse_ansi_command(
     global cursor
     global terminal_grid
     global saved_cursor_pos
+    global scroll_idx
     
     if len(ansi_code) == 0:
         return 4 # wrong number of arguments
@@ -460,25 +530,52 @@ def _parse_ansi_command(
     if len(code) > 2:
         return 4
     
+    possible_codes = "ABCDEFGHJK" # strs are just char tuples in py
+    if code[-1] not in possible_codes:
+        return
+    
+    try:
+        MAX_Y = len(terminal_grid) - 1
+        MAX_X = len(terminal_grid[cursor[1]]) - 1
+    except IndexError:
+        logging.warning(f"INDEX ERROR AT LINE 538-9!!\ncursor: {cursor}\nlen(terminal_grid): {len(terminal_grid)}")
+        return 5 # Error
+    
     if code[0] == "":
-        if code[1] == "H":
-            cursor = [0, 0]
-        
-        elif code[1] == "J":
-            for char_index in range(len(terminal_grid[cursor[1]][cursor[0] + 1::])):
-                del terminal_grid[cursor[1]][cursor[0] + 1]
+        match code[1]:
+            case "A":
+                if cursor[1] <= 0: return
+                cursor[1] -= 1
+            case "B":
+                if cursor[1] >= MAX_Y: return
+                cursor[1] += 1
+            case "C":
+                if cursor[0] >= MAX_X: return
+                cursor[0] += 1
+            case "D":
+                if cursor[0] <= 0: return
+                cursor[0] -= 1
+            case "E":
+                cursor[1] += 1
+                cursor[0] = 0
+            case "F":
+                cursor[1] -= 1
+                cursor[0] = 0
+            case "H": cursor = [0, 0]
             
-            for line_index in range(len(terminal_grid[cursor[1] + 1::])):
-                del terminal_grid[cursor[1] + 1]
+            case "J":
+                for char_index in range(len(terminal_grid[cursor[1]][cursor[0] + 1::])):
+                    del terminal_grid[cursor[1]][cursor[0] + 1]
+                
+                for line_index in range(len(terminal_grid[cursor[1] + 1::])):
+                    del terminal_grid[cursor[1] + 1]
             
-        elif code[1] == "K":
-            for char_index in range(len(terminal_grid[cursor[1][cursor[0] + 1::]])):
-                del terminal_grid[cursor[1]][cursor[0] + 1]
-        
-        if code[1] == "s":
-            saved_cursor_pos = cursor
-        elif code[1] == "u":
-            cursor = saved_cursor_pos
+            case "K":
+                for char_index in range(len(terminal_grid[cursor[1][cursor[0] + 1::]])):
+                    del terminal_grid[cursor[1]][cursor[0] + 1]
+            
+            case "s": saved_cursor_pos = cursor
+            case "u": cursor = saved_cursor_pos
         
         return
     
@@ -490,19 +587,25 @@ def _parse_ansi_command(
             return
     
     match code[-1]:
-        case "A": cursor[1] -= num
-        case "B": cursor[1] += num
+        case "A":
+            if cursor[1] - num <= 0: cursor[1] = 0
+            else: cursor[1] -= num
+        case "B":
+            if cursor[1] + num >= MAX_Y: cursor[1]
+            else: cursor[1] += num
         case "C":
-            if cursor[0] + num < len(terminal_grid[cursor[1]]): cursor[0] += num
-            else: cursor[0] = len(terminal_grid[cursor[1]]) - 1
+            if cursor[0] + num < MAX_X: cursor[0] += num
+            else: cursor[0] = MAX_X
         case "D":
             if cursor[0] - num >= 0: cursor[0] -= num
             else: cursor[0] = 0
         case "E":
-            cursor[1] += num
+            if cursor[1] + num >= MAX_Y: cursor[1] = MAX_Y
+            else: cursor[1] += num
             cursor[0] = 0
         case "F":
-            cursor[1] -= num
+            if cursor[1] - num <= 0: cursor[1] = 0
+            else: cursor[1] -= num
             cursor[0] = 0
         case "G": cursor[0] = num
         case "H":
@@ -523,7 +626,8 @@ def _parse_ansi_command(
                         " ",
                         char.font,
                         (200, 200, 200),
-                        (12, 12, 12)
+                        (12, 12, 12),
+                        [current_font.get_italic(), current_font.get_underline(), current_font.get_strikethrough()]
                     )
                 
                 for char_index in range(len(terminal_grid[:cursor[1]:])):
@@ -533,6 +637,7 @@ def _parse_ansi_command(
             elif num == 2:
                 terminal_grid = [[]]
                 cursor = [0, 0]
+                scroll_idx = 0
         
         case "K":
             if num == 0:
@@ -546,7 +651,8 @@ def _parse_ansi_command(
                         " ",
                         "consolas-mono",
                         (200, 200, 200),
-                        (12, 12, 12)
+                        (12, 12, 12),
+                        [current_font.get_italic(), current_font.get_underline(), current_font.get_strikethrough()]
                     )
                 cursor[0] = 0
             
@@ -571,15 +677,18 @@ def update_terminal(
         int: The Y coordinate on-screen of the next piece of text.
     """
     global terminal_grid
+    global scroll_idx
     global fonts
     global screen
     global char_height
-    global updating_screen
-    updating_screen = True
+    render_grid = terminal_grid[scroll_idx::]
     
     if line_index is not None:
-        line = terminal_grid[line_index]
-        prev_attr = ("", [0, 0, 0, 0], [0, 0, 0, 0])
+        try:
+            line = render_grid[line_index]
+        except IndexError:
+            return
+        prev_attr = None
         buffer = ""
         counting_width = 0
         text_y = _calculate_y_offset(end=line_index)
@@ -593,30 +702,41 @@ def update_terminal(
         for char in line:
             if char.extract_attributes() == prev_attr:
                 buffer += char.letter
+                continue
             
-            elif prev_attr == ("", [0, 0, 0, 0], [0, 0, 0, 0]):
+            elif prev_attr == None:
                 prev_attr = char.extract_attributes()
                 buffer += char.letter
+                continue
             
-            else:
-                font: pygame.font.Font = fonts[prev_attr[0]]
-                rendered_text: pygame.Surface = font.render(
-                    buffer,
-                    False,
-                    prev_attr[1],
-                    prev_attr[2]
-                )
-                screen.blit(
-                    source=rendered_text,
-                    dest=(counting_width, text_y)
-                )
-                counting_width += font.size(buffer)[0]
-                prev_attr = char.extract_attributes()
-                buffer = char.letter
+            
+            font: pygame.font.Font = fonts[prev_attr[0]]
+            font_options = prev_attr[3]
+            font.set_italic(font_options[0])
+            font.set_underline(font_options[1])
+            font.set_strikethrough(font_options[2])
+            rendered_text: pygame.Surface = font.render(
+                buffer,
+                False,
+                prev_attr[1],
+                prev_attr[2]
+            )
+            screen.blit(
+                source=rendered_text,
+                dest=(counting_width, text_y)
+            )
+            counting_width += font.size(buffer)[0]
+            prev_attr = char.extract_attributes()
+            buffer = char.letter
         
-        if not buffer:
+        if not buffer: # Hey what the fuck how does this cooperate with the rest of the program??
             return
+        
         font: pygame.font.Font = fonts[prev_attr[0]]
+        font_options = prev_attr[3]
+        font.set_italic(font_options[0])
+        font.set_underline(font_options[1])
+        font.set_strikethrough(font_options[2])
         rendered_text: pygame.Surface = font.render(
             buffer,
             False,
@@ -631,10 +751,8 @@ def update_terminal(
         counting_width += font.size(buffer)[0]
     else:
         screen.fill((12, 12, 12))
-        for line_index in range(len(terminal_grid)):
-            update_terminal(line_index) # yeah.
-    
-    updating_screen = False
+        for line_index in range(len(render_grid[:35:])):
+            update_terminal(line_index) # yeah. DRY for the win?
 
 
 def switch_font(
@@ -670,12 +788,12 @@ def switch_font(
 def input(
     text: str = "",
     default_text: str = "",
-    end_text: str = "\n"
+    end_text: str = ""
 ) -> str | None:
     """Takes input from the user.
     No, it doesn't print a newline on end like regular `input()`.
     Yes, it does pause the thread like regular `input()`, but rest assured the window will not stop responding.
-    By the way, it only uses `terminal.update()` on the line the cursor is on.
+    By the way, it only uses `terminal.update()` on the line the cursor is on unless the user scrolls.
 
     Args:
         text (str, optional): The text that should be there, like "Num of birthdays >".
@@ -689,19 +807,25 @@ def input(
     global cursor
     global terminal_grid
     global quit_flag
+    global _MOUSEWHEEL_events
     printf(text)
-    if default_text:
-        printf(default_text)
-    update_terminal(cursor[1])
+    printf(default_text)
+    compiled_cursor = cursor[1] - scroll_idx
+    if compiled_cursor < 35 and compiled_cursor >= 0:
+        update_terminal(compiled_cursor)
     flush()
     text_input = list(default_text)
     insert_pos = len(text_input)
     exit_flag = False
     while not exit_flag:
+        compiled_cursor = cursor[1] - scroll_idx
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 quit_flag = True
                 return
+            elif event.type == pygame.MOUSEWHEEL:
+                _MOUSEWHEEL_events.append(event)
+                continue
             elif event.type != pygame.KEYDOWN:
                 continue
             
@@ -722,8 +846,16 @@ def input(
                 insert_pos -= 1
                 cursor[0] -= 1
                 text_input.pop(insert_pos)
-                terminal_grid[cursor[1]].pop(cursor[0])
-                update_terminal(cursor[1])
+                try:
+                    terminal_grid[cursor[1]].pop(cursor[0])
+                except IndexError as e:
+                    special_print(logging.WARNING, f"ERR CAUGHT: {e}")
+                    special_print(logging.WARNING, f"cursor: {cursor}")
+                
+                compiled_cursor = cursor[1] - scroll_idx
+                if compiled_cursor > 35 or compiled_cursor < 0:
+                    continue
+                update_terminal(compiled_cursor)
                 flush()
                 continue
             
@@ -732,8 +864,12 @@ def input(
             text_input.insert(insert_pos, key)
             insert_pos += 1
             printf(key)
-            update_terminal(cursor[1])
+            compiled_cursor = cursor[1] - scroll_idx
+            if compiled_cursor > 35 or compiled_cursor < 0:
+                continue
+            update_terminal(compiled_cursor)
             flush()
+    printf(end_text)
     return "".join(text_input)
 
 
