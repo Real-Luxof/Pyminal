@@ -169,7 +169,6 @@ def _scrolling_thread() -> None:
     while not quit_flag:
         sleep(1/30)
         if scroll_lock:
-            scroll_idx = 0
             continue
         
         if len(_MOUSEWHEEL_events) <= 0:
@@ -222,14 +221,14 @@ def printf(
 ) -> None:
     """Attempts to print text to the screen. You may use ANSI codes.\n
     
-    Overwrites the previous line with new text if overwrite is `True`. Example:\n
+    Overwrites the previous line with new text if `overwrite` is `True`. Example:\n
         line = "foobar"
         printf("bar") # when cursor_X = 0
         "barbar" # when overwrite = True
         "barfoobar" # when overwrite = False
     
-    Calls `terminal_update()` on end if update is `True`.\n
-    Also calls `flush()` on end if flush_ is `True`.
+    Calls `terminal_update()` on end if `update` is `True`.\n
+    Also calls `flush()` on end if `flush_` is `True`.
     
     Fun fact: if you put too much text on one line it will go out of bounds and be cut off, probably.
 
